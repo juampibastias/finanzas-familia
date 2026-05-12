@@ -156,7 +156,7 @@ export default function MovimientosPage(): React.ReactElement {
       />
 
       <Card className="mb-4">
-        <CardContent className="p-4 grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
+        <CardContent className="p-4 grid gap-3 grid-cols-2 sm:grid-cols-2 lg:grid-cols-5">
           <div className="space-y-1.5">
             <Label htmlFor="from">Desde</Label>
             <Input
@@ -181,7 +181,7 @@ export default function MovimientosPage(): React.ReactElement {
               }}
             />
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 col-span-2 sm:col-span-1">
             <Label>Cuenta</Label>
             <Select
               value={accountId}
@@ -203,7 +203,7 @@ export default function MovimientosPage(): React.ReactElement {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 col-span-2 sm:col-span-1">
             <Label>Categoría</Label>
             <Select
               value={categoryId}
@@ -225,7 +225,7 @@ export default function MovimientosPage(): React.ReactElement {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 col-span-2 sm:col-span-1">
             <Label>Tipo</Label>
             <Select
               value={type}

@@ -22,6 +22,12 @@ import {
 } from "recharts";
 import { PageHeader } from "@/components/page-header";
 import { formatCurrency, formatDate } from "@/lib/format";
+
+function compactCurrency(v: number): string {
+  if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(v) >= 1_000) return `$${Math.round(v / 1_000)}k`;
+  return `$${v}`;
+}
 import { Badge } from "@/components/ui/badge";
 import { Wallet, TrendingUp, TrendingDown, CreditCard, AlertCircle } from "lucide-react";
 
@@ -158,7 +164,7 @@ export default function DashboardPage(): React.ReactElement {
                     textAnchor="end"
                     height={60}
                   />
-                  <YAxis tickFormatter={(v) => formatCurrency(Number(v))} width={80} tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(v) => compactCurrency(Number(v))} width={64} tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v) => formatCurrency(Number(v))} />
                   <Bar dataKey="total" fill="#6366f1" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -177,7 +183,7 @@ export default function DashboardPage(): React.ReactElement {
                 <LineChart data={data.cashflowSeries}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                  <YAxis tickFormatter={(v) => formatCurrency(Number(v))} width={80} tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(v) => compactCurrency(Number(v))} width={64} tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v) => formatCurrency(Number(v))} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   <Line type="monotone" dataKey="income" stroke="#16a34a" name="Ingresos" />
