@@ -239,6 +239,51 @@ export default function PagosPage(): React.ReactElement {
       </div>
 
       <div className="space-y-4">
+        {/* Vencidos */}
+        {(() => {
+          const overdue = debts
+            .filter((d) => !d.paid && new Date(d.dueDate) < weeks[0]!.wStart)
+            .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+          if (overdue.length === 0) return null;
+          return (
+            <section>
+              <div className="sticky top-14 z-30 bg-background py-2 -mx-4 px-4 sm:-mx-6 sm:px-6 border-b">
+                <h2 className="font-semibold text-sm text-destructive">
+                  Vencidos <span className="font-normal text-muted-foreground">— pendientes de pago</span>
+                </h2>
+              </div>
+              <div className="mt-3 space-y-2">
+                {overdue.map((d) => (
+                  <Card key={d._id} className="border-destructive/50">
+                    <CardContent className="p-3 sm:p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-medium truncate">{d.name}</h3>
+                            <Badge variant="destructive">{d.priority}</Badge>
+                          </div>
+                          <p className="text-xs text-destructive mt-0.5">Venció {formatDate(d.dueDate)}</p>
+                          {d.notes ? <p className="text-xs mt-1">{d.notes}</p> : null}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-semibold tabular-nums">{formatCurrency(d.amount)}</div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <Button size="sm" onClick={() => setPayDebt(d)} className="flex-1">
+                          <Check className="mr-1 size-3.5" />Marcar pagada
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => openEdit(d)} aria-label="Editar"><Pencil className="size-3.5" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => removeDebt(d._id)} aria-label="Borrar"><Trash2 className="size-3.5" /></Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          );
+        })()}
+
         {weeks.map((w) => {
           const items = debts
             .filter(
