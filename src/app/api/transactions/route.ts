@@ -6,6 +6,7 @@ import { addMonths, toMonthKey } from "@/lib/format";
 import { handleAuthError, handleError, jsonOk, requireAuth } from "@/lib/api-utils";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(req: Request): Promise<Response> {
   try {
@@ -27,8 +28,8 @@ export async function GET(req: Request): Promise<Response> {
     const filter: Record<string, unknown> = {};
     if (from || to) {
       const dateFilter: Record<string, Date> = {};
-      if (from) dateFilter.$gte = new Date(from);
-      if (to) dateFilter.$lte = new Date(to);
+      if (from) dateFilter.$gte = new Date(from + "T00:00:00.000Z");
+      if (to) dateFilter.$lte = new Date(to + "T23:59:59.999Z");
       filter.date = dateFilter;
     }
     if (accountId && Types.ObjectId.isValid(accountId)) {
