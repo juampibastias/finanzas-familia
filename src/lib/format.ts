@@ -27,12 +27,19 @@ export function formatDate(
   fmt = "dd/MM/yyyy",
 ): string {
   if (!d) return "";
-  const date = typeof d === "string" ? parseISO(d) : d;
-  return format(date, fmt, { locale: es });
+  // Always use the date-part only so UTC→local shift never changes the calendar day
+  const datePart = typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10);
+  return format(parseISO(datePart), fmt, { locale: es });
 }
 
 export function formatDateLong(d: Date | string | null | undefined): string {
   return formatDate(d, "EEEE d 'de' MMMM");
+}
+
+/** Returns today's date as a "yyyy-MM-dd" string in LOCAL time (not UTC). */
+export function todayLocalStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 export function toMonthKey(d: Date = new Date()): string {

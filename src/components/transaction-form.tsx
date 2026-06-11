@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { confirmDelete } from "@/lib/swal";
+import { todayLocalStr } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -51,7 +52,7 @@ export interface TransactionFormState {
 }
 
 export const emptyTransaction: TransactionFormState = {
-  date: new Date().toISOString().slice(0, 10),
+  date: todayLocalStr(),
   amount: "",
   type: "expense",
   accountId: "",

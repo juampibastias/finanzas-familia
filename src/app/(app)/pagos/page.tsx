@@ -26,7 +26,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/page-header";
-import { formatCurrency, formatDate } from "@/lib/format";
+import { formatCurrency, formatDate, todayLocalStr } from "@/lib/format";
 
 interface DebtRow {
   _id: string;
@@ -55,7 +55,7 @@ interface DebtFormState {
 const emptyDebt: DebtFormState = {
   name: "",
   amount: "",
-  dueDate: new Date().toISOString().slice(0, 10),
+  dueDate: todayLocalStr(),
   priority: "medium",
   notes: "",
 };
