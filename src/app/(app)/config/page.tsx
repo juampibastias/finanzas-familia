@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { confirmDelete } from "@/lib/swal";
-import { Plus, Pencil, Trash2, Download, KeyRound } from "lucide-react";
+import { Plus, Pencil, Trash2, Download, KeyRound, RefreshCw, Link2, Link2Off, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/page-header";
+import { formatDate } from "@/lib/format";
 
 interface CategoryRow {
   _id: string;
@@ -36,6 +38,22 @@ interface CategoryRow {
   fixed: boolean;
   color: string;
   icon: string;
+}
+
+interface MPConnectionRow {
+  _id: string;
+  mpUserId: string;
+  mpNickname: string;
+  mpEmail: string;
+  lastSyncAt: string | null;
+  linkedAccountId: { _id: string; name: string; type: string };
+}
+
+interface AccountOpt {
+  _id: string;
+  name: string;
+  type: string;
+  bank: string | null;
 }
 
 interface CategoryFormState {
@@ -55,19 +73,49 @@ const emptyCategory: CategoryFormState = {
   icon: "Circle",
 };
 
-export default function ConfigPage(): React.ReactElement {
+function ConfigPageInner(): React.ReactElement {
+  const searchParams = useSearchParams();
+  const defaultTab = searchParams.get("tab") ?? "categorias";
+
   const [categories, setCategories] = useState<CategoryRow[] | null>(null);
   const [openForm, setOpenForm] = useState(false);
   const [editing, setEditing] = useState<CategoryFormState | null>(null);
+
+  // MP state
+  const [mpConnections, setMpConnections] = useState<MPConnectionRow[] | null>(null);
+  const [mpAccounts, setMpAccounts] = useState<AccountOpt[]>([]);
+  const [mpSelectedAccount, setMpSelectedAccount] = useState<string>("");
+  const [mpSyncing, setMpSyncing] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/categories", { cache: "no-store" });
     if (res.ok) setCategories((await res.json()) as CategoryRow[]);
   }, []);
 
+  const loadMp = useCallback(async () => {
+    const [connRes, accRes] = await Promise.all([
+      fetch("/api/mp/connections", { cache: "no-store" }),
+      fetch("/api/accounts", { cache: "no-store" }),
+    ]);
+    if (connRes.ok) setMpConnections((await connRes.json()) as MPConnectionRow[]);
+    if (accRes.ok) {
+      const all = (await accRes.json()) as AccountOpt[];
+      setMpAccounts(all.filter((a) => a.bank === "MercadoPago" || a.type === "wallet"));
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadMp();
+  }, [load, loadMp]);
+
+  // Handle MP OAuth redirect result
+  useEffect(() => {
+    const success = searchParams.get("mp_success");
+    const error = searchParams.get("mp_error");
+    if (success) toast.success("MercadoPago conectado. Importando movimientos...");
+    if (error) toast.error(`Error conectando MP: ${error}`);
+  }, [searchParams]);
 
   function openCreate(): void {
     setEditing({ ...emptyCategory });
@@ -126,6 +174,33 @@ export default function ConfigPage(): React.ReactElement {
     }
   }
 
+  async function mpSync(connectionId: string): Promise<void> {
+    setMpSyncing(connectionId);
+    const res = await fetch("/api/mp/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connectionId }),
+    });
+    setMpSyncing(null);
+    if (res.ok) {
+      const data = (await res.json()) as { imported: number; skipped: number; errors: number };
+      toast.success(`Sincronizado: ${data.imported} nuevos, ${data.skipped} ya existentes`);
+      void loadMp();
+    } else {
+      toast.error("Error al sincronizar");
+    }
+  }
+
+  async function mpDisconnect(connectionId: string): Promise<void> {
+    const res = await fetch(`/api/mp/connections?id=${connectionId}`, { method: "DELETE" });
+    if (res.ok) {
+      toast.success("Desvinculado");
+      void loadMp();
+    } else {
+      toast.error("Error al desvincular");
+    }
+  }
+
   async function exportJson(): Promise<void> {
     const res = await fetch("/api/export");
     if (!res.ok) {
@@ -147,17 +222,12 @@ export default function ConfigPage(): React.ReactElement {
   return (
     <>
       <PageHeader title="Configuración" />
-      <Tabs defaultValue="categorias">
-        <TabsList className="w-full sm:w-auto">
-          <TabsTrigger value="categorias" className="flex-1 sm:flex-none">
-            Categorías
-          </TabsTrigger>
-          <TabsTrigger value="cuenta" className="flex-1 sm:flex-none">
-            Cuenta
-          </TabsTrigger>
-          <TabsTrigger value="backup" className="flex-1 sm:flex-none">
-            Backup
-          </TabsTrigger>
+      <Tabs defaultValue={defaultTab}>
+        <TabsList className="w-full sm:w-auto flex-wrap h-auto gap-1">
+          <TabsTrigger value="categorias" className="flex-1 sm:flex-none">Categorías</TabsTrigger>
+          <TabsTrigger value="mercadopago" className="flex-1 sm:flex-none">MercadoPago</TabsTrigger>
+          <TabsTrigger value="cuenta" className="flex-1 sm:flex-none">Cuenta</TabsTrigger>
+          <TabsTrigger value="backup" className="flex-1 sm:flex-none">Backup</TabsTrigger>
         </TabsList>
 
         <TabsContent value="categorias" className="mt-4">
@@ -204,6 +274,117 @@ export default function ConfigPage(): React.ReactElement {
               ))}
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="mercadopago" className="mt-4 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Conectar cuenta MercadoPago</CardTitle>
+              <CardDescription>
+                Vinculá tu cuenta MP para importar automáticamente gastos e ingresos.
+                Cada usuario conecta la suya por separado.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {mpAccounts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No tenés cuentas de tipo MercadoPago creadas. Creá una en Cuentas con banco &ldquo;MercadoPago&rdquo; primero.
+                </p>
+              ) : (
+                <div className="flex gap-2 flex-wrap">
+                  <Select value={mpSelectedAccount} onValueChange={setMpSelectedAccount}>
+                    <SelectTrigger className="w-full sm:w-56">
+                      <SelectValue placeholder="Elegí la cuenta MP" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {mpAccounts.map((a) => (
+                        <SelectItem key={a._id} value={a._id}>{a.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    asChild={!!mpSelectedAccount}
+                    disabled={!mpSelectedAccount}
+                    className="flex-1 sm:flex-none"
+                  >
+                    {mpSelectedAccount ? (
+                      <a href={`/api/mp/connect?accountId=${mpSelectedAccount}`}>
+                        <Link2 className="mr-2 size-4" />
+                        Conectar con MP
+                      </a>
+                    ) : (
+                      <span>
+                        <Link2 className="mr-2 size-4" />
+                        Conectar con MP
+                      </span>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {mpConnections === null ? (
+            <Skeleton className="h-32" />
+          ) : mpConnections.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Ninguna cuenta conectada todavía.</p>
+          ) : (
+            <div className="space-y-2">
+              {mpConnections.map((c) => (
+                <Card key={c._id}>
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <div className="font-medium">{c.mpNickname || c.mpEmail}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {c.mpEmail} · Cuenta: <strong>{c.linkedAccountId?.name}</strong>
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {c.lastSyncAt
+                            ? `Última sync: ${formatDate(c.lastSyncAt)} ${new Date(c.lastSyncAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}`
+                            : "Sin sincronizar aún"}
+                        </div>
+                      </div>
+                      <div className="flex gap-2 shrink-0 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => mpSync(c._id)}
+                          disabled={mpSyncing === c._id}
+                        >
+                          {mpSyncing === c._id ? (
+                            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="size-3.5 mr-1.5" />
+                          )}
+                          Sincronizar
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => mpDisconnect(c._id)}
+                        >
+                          <Link2Off className="size-3.5 mr-1.5" />
+                          Desvincular
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          <Card className="border-dashed">
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">
+                <strong>Webhook URL</strong> (configurar en tu app de MP Developers para recibir movimientos en tiempo real):<br />
+                <code className="bg-muted px-1 py-0.5 rounded text-xs break-all">
+                  {typeof window !== "undefined" ? window.location.origin : ""}/api/mp/webhook
+                </code>
+              </p>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="cuenta" className="mt-4">
@@ -307,5 +488,13 @@ export default function ConfigPage(): React.ReactElement {
         </SheetContent>
       </Sheet>
     </>
+  );
+}
+
+export default function ConfigPage(): React.ReactElement {
+  return (
+    <Suspense>
+      <ConfigPageInner />
+    </Suspense>
   );
 }

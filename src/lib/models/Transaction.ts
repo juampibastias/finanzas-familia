@@ -18,6 +18,7 @@ export interface ITransaction extends Document {
   recurring: boolean;
   recurringMonth: string | null;
   notes: string;
+  externalRef: string | null;
   createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -58,6 +59,7 @@ const TransactionSchema = new Schema<ITransaction>(
     recurring: { type: Boolean, default: false },
     recurringMonth: { type: String, default: null }, // YYYY-MM
     notes: { type: String, default: "" },
+    externalRef: { type: String, default: null, index: true, sparse: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
   },
   { timestamps: true },
