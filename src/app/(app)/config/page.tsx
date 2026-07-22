@@ -220,17 +220,21 @@ function ConfigPageInner(): React.ReactElement {
     }
   }
 
-  async function mpSync(connectionId: string): Promise<void> {
+  async function mpSync(connectionId: string, reset = false): Promise<void> {
     setMpSyncing(connectionId);
     const res = await fetch("/api/mp/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ connectionId }),
+      body: JSON.stringify({ connectionId, reset }),
     });
     setMpSyncing(null);
     if (res.ok) {
       const data = (await res.json()) as { imported: number; skipped: number; errors: number };
-      toast.success(`Sincronizado: ${data.imported} nuevos, ${data.skipped} ya existentes`);
+      if (reset) {
+        toast.success(`Reimportado: ${data.imported} movimientos con categorías mejoradas`);
+      } else {
+        toast.success(`Sincronizado: ${data.imported} nuevos, ${data.skipped} ya existentes`);
+      }
       void loadMp();
       void loadMpTxs(connectionId);
     } else {
@@ -411,6 +415,21 @@ function ConfigPageInner(): React.ReactElement {
                               <RefreshCw className="size-3.5 mr-1.5" />
                             )}
                             Sincronizar
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-amber-600 border-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950"
+                            onClick={() => mpSync(c._id, true)}
+                            disabled={mpSyncing === c._id}
+                            title="Borra los movimientos importados y los reimporta con IA mejorada"
+                          >
+                            {mpSyncing === c._id ? (
+                              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                            ) : (
+                              <RefreshCw className="size-3.5 mr-1.5" />
+                            )}
+                            Reimportar todo
                           </Button>
                           <Button
                             size="sm"
