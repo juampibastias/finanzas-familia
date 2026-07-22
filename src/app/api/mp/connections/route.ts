@@ -3,6 +3,7 @@ import { Types } from "mongoose";
 import { requireAuth, handleAuthError, handleError } from "@/lib/api-utils";
 import { connectDB } from "@/lib/db";
 import { MPConnection } from "@/lib/models/MPConnection";
+import "@/lib/models/Account"; // register model so populate() works
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
