@@ -3,7 +3,6 @@ import { requireAuth } from "@/lib/api-utils";
 import { connectDB } from "@/lib/db";
 import { MPConnection } from "@/lib/models/MPConnection";
 import { exchangeCode, mpGet, decodeState, type MPUserInfo } from "@/lib/mp-api";
-import { syncMPConnection } from "@/lib/mp-sync";
 import { Types } from "mongoose";
 
 export const runtime = "nodejs";
@@ -62,12 +61,7 @@ export async function GET(req: Request): Promise<Response> {
       { upsert: true, new: true },
     );
 
-    // Trigger initial background sync (don't await, just start it)
-    const conn = await MPConnection.findOne({ userId: new Types.ObjectId(userId), mpUserId: String(mpUser.id) });
-    if (conn) {
-      syncMPConnection(String(conn._id), userId).catch(console.error);
-    }
-
+    // Sync is triggered from the frontend after redirect (background promises die in Vercel serverless)
     return NextResponse.redirect(`${base}/config?tab=mercadopago&mp_success=1`);
   } catch (err) {
     console.error("[mp/callback]", err);

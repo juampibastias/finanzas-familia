@@ -109,13 +109,37 @@ function ConfigPageInner(): React.ReactElement {
     void loadMp();
   }, [load, loadMp]);
 
-  // Handle MP OAuth redirect result
+  // Handle MP OAuth redirect result — auto-trigger sync after connection
   useEffect(() => {
     const success = searchParams.get("mp_success");
     const error = searchParams.get("mp_error");
-    if (success) toast.success("MercadoPago conectado. Importando movimientos...");
-    if (error) toast.error(`Error conectando MP: ${error}`);
-  }, [searchParams]);
+    if (error) { toast.error(`Error conectando MP: ${error}`); return; }
+    if (!success) return;
+
+    toast.success("MercadoPago conectado. Sincronizando movimientos...");
+    // Wait for DB to settle then auto-sync all connections
+    setTimeout(() => {
+      void (async () => {
+        const res = await fetch("/api/mp/connections", { cache: "no-store" });
+        if (!res.ok) return;
+        const conns = (await res.json()) as MPConnectionRow[];
+        for (const c of conns) {
+          setMpSyncing(c._id);
+          const syncRes = await fetch("/api/mp/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ connectionId: c._id }),
+          });
+          setMpSyncing(null);
+          if (syncRes.ok) {
+            const data = (await syncRes.json()) as { imported: number; skipped: number };
+            toast.success(`Sincronizado: ${data.imported} nuevos movimientos importados`);
+          }
+        }
+        void loadMp();
+      })();
+    }, 1500);
+  }, [searchParams, loadMp]);
 
   function openCreate(): void {
     setEditing({ ...emptyCategory });
