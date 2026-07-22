@@ -8,6 +8,7 @@ export interface IUser extends Document {
   name: string;
   role: UserRole;
   mustChangePassword: boolean;
+  phone: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +32,7 @@ const UserSchema = new Schema<IUser>(
       required: true,
     },
     mustChangePassword: { type: Boolean, default: true },
+    phone: { type: String, default: null, trim: true }, // whatsapp number e.g. +5492614001122
   },
   { timestamps: true },
 );

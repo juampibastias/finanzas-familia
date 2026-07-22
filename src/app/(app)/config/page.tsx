@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { confirmDelete } from "@/lib/swal";
-import { Plus, Pencil, Trash2, Download, KeyRound, RefreshCw, Link2, Link2Off, Loader2, TrendingUp, TrendingDown } from "lucide-react";
+import { Plus, Pencil, Trash2, Download, KeyRound, RefreshCw, Link2, Link2Off, Loader2, TrendingUp, TrendingDown, Repeat, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,6 +56,25 @@ interface AccountOpt {
   bank: string | null;
 }
 
+interface RecurringRow {
+  _id: string;
+  description: string;
+  amount: number;
+  type: "income" | "expense";
+  dayOfMonth: number;
+  accountId: { _id: string; name: string };
+  categoryId: { _id: string; name: string; color: string };
+}
+
+interface RecurringForm {
+  description: string;
+  amount: string;
+  type: "income" | "expense";
+  accountId: string;
+  categoryId: string;
+  dayOfMonth: string;
+}
+
 interface MPTxRow {
   _id: string;
   date: string;
@@ -97,6 +116,16 @@ function ConfigPageInner(): React.ReactElement {
   const [mpSyncing, setMpSyncing] = useState<string | null>(null);
   const [mpTxs, setMpTxs] = useState<Record<string, MPTxRow[]>>({});
 
+  // Recurring state
+  const [recurring, setRecurring] = useState<RecurringRow[] | null>(null);
+  const [recForm, setRecForm] = useState<RecurringForm | null>(null);
+  const [allAccounts, setAllAccounts] = useState<AccountOpt[]>([]);
+  const [allCategories, setAllCategories] = useState<CategoryRow[]>([]);
+
+  // Cuenta state
+  const [phone, setPhone] = useState("");
+  const [savingPhone, setSavingPhone] = useState(false);
+
   const load = useCallback(async () => {
     const res = await fetch("/api/categories", { cache: "no-store" });
     if (res.ok) setCategories((await res.json()) as CategoryRow[]);
@@ -126,10 +155,31 @@ function ConfigPageInner(): React.ReactElement {
     }
   }, [loadMpTxs]);
 
+  const loadRecurring = useCallback(async () => {
+    const [recRes, accRes, catRes] = await Promise.all([
+      fetch("/api/recurring", { cache: "no-store" }),
+      fetch("/api/accounts", { cache: "no-store" }),
+      fetch("/api/categories", { cache: "no-store" }),
+    ]);
+    if (recRes.ok) setRecurring((await recRes.json()) as RecurringRow[]);
+    if (accRes.ok) setAllAccounts((await accRes.json()) as AccountOpt[]);
+    if (catRes.ok) setAllCategories((await catRes.json()) as CategoryRow[]);
+  }, []);
+
+  const loadPhone = useCallback(async () => {
+    const res = await fetch("/api/me", { cache: "no-store" });
+    if (res.ok) {
+      const data = (await res.json()) as { phone?: string };
+      setPhone(data.phone ?? "");
+    }
+  }, []);
+
   useEffect(() => {
     void load();
     void loadMp();
-  }, [load, loadMp]);
+    void loadRecurring();
+    void loadPhone();
+  }, [load, loadMp, loadRecurring, loadPhone]);
 
   // Handle MP OAuth redirect result — auto-trigger sync after connection
   useEffect(() => {
@@ -242,6 +292,51 @@ function ConfigPageInner(): React.ReactElement {
     }
   }
 
+  async function savePhone(): Promise<void> {
+    setSavingPhone(true);
+    const res = await fetch("/api/me", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: phone.trim() || null }),
+    });
+    setSavingPhone(false);
+    if (res.ok) toast.success("Teléfono guardado");
+    else toast.error("Error guardando");
+  }
+
+  async function saveRecurring(): Promise<void> {
+    if (!recForm) return;
+    if (!recForm.description || !recForm.amount || !recForm.accountId || !recForm.categoryId || !recForm.dayOfMonth) {
+      toast.error("Completá todos los campos");
+      return;
+    }
+    const res = await fetch("/api/recurring", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: recForm.description,
+        amount: Number(recForm.amount),
+        type: recForm.type,
+        accountId: recForm.accountId,
+        categoryId: recForm.categoryId,
+        dayOfMonth: Number(recForm.dayOfMonth),
+      }),
+    });
+    if (res.ok) {
+      toast.success("Recurrente guardado");
+      setRecForm(null);
+      void loadRecurring();
+    } else {
+      toast.error("Error guardando");
+    }
+  }
+
+  async function deleteRecurring(id: string): Promise<void> {
+    const res = await fetch(`/api/recurring/${id}`, { method: "DELETE" });
+    if (res.ok) { toast.success("Eliminado"); void loadRecurring(); }
+    else toast.error("Error");
+  }
+
   async function mpDisconnect(connectionId: string): Promise<void> {
     const res = await fetch(`/api/mp/connections?id=${connectionId}`, { method: "DELETE" });
     if (res.ok) {
@@ -277,6 +372,7 @@ function ConfigPageInner(): React.ReactElement {
         <TabsList className="w-full sm:w-auto flex-wrap h-auto gap-1">
           <TabsTrigger value="categorias" className="flex-1 sm:flex-none">Categorías</TabsTrigger>
           <TabsTrigger value="mercadopago" className="flex-1 sm:flex-none">MercadoPago</TabsTrigger>
+          <TabsTrigger value="recurrentes" className="flex-1 sm:flex-none">Recurrentes</TabsTrigger>
           <TabsTrigger value="cuenta" className="flex-1 sm:flex-none">Cuenta</TabsTrigger>
           <TabsTrigger value="backup" className="flex-1 sm:flex-none">Backup</TabsTrigger>
         </TabsList>
@@ -511,11 +607,135 @@ function ConfigPageInner(): React.ReactElement {
           </Card>
         </TabsContent>
 
-        <TabsContent value="cuenta" className="mt-4">
+        <TabsContent value="recurrentes" className="mt-4 space-y-4">
+          <div className="flex justify-end">
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => setRecForm({ description: "", amount: "", type: "expense", accountId: allAccounts[0]?._id ?? "", categoryId: "", dayOfMonth: "1" })}
+            >
+              <Plus className="mr-2 size-4" />
+              Nuevo recurrente
+            </Button>
+          </div>
+
+          {recForm && (
+            <Card>
+              <CardHeader><CardTitle className="text-base">Nuevo movimiento recurrente</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2 space-y-1.5">
+                    <Label>Descripción</Label>
+                    <Input value={recForm.description} onChange={(e) => setRecForm({ ...recForm, description: e.target.value })} placeholder="Ej: Luz, Gas, Netflix..." />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Monto</Label>
+                    <Input type="number" value={recForm.amount} onChange={(e) => setRecForm({ ...recForm, amount: e.target.value })} placeholder="0" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Día del mes</Label>
+                    <Input type="number" min={1} max={28} value={recForm.dayOfMonth} onChange={(e) => setRecForm({ ...recForm, dayOfMonth: e.target.value })} placeholder="1-28" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Tipo</Label>
+                    <Select value={recForm.type} onValueChange={(v) => setRecForm({ ...recForm, type: v as "income" | "expense" })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="expense">Gasto</SelectItem>
+                        <SelectItem value="income">Ingreso</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Cuenta</Label>
+                    <Select value={recForm.accountId} onValueChange={(v) => setRecForm({ ...recForm, accountId: v })}>
+                      <SelectTrigger><SelectValue placeholder="Elegí cuenta" /></SelectTrigger>
+                      <SelectContent>
+                        {allAccounts.map((a) => <SelectItem key={a._id} value={a._id}>{a.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="col-span-2 space-y-1.5">
+                    <Label>Categoría</Label>
+                    <Select value={recForm.categoryId} onValueChange={(v) => setRecForm({ ...recForm, categoryId: v })}>
+                      <SelectTrigger><SelectValue placeholder="Elegí categoría" /></SelectTrigger>
+                      <SelectContent>
+                        {allCategories.filter((c) => c.kind === recForm.type).map((c) => <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="outline" onClick={() => setRecForm(null)}>Cancelar</Button>
+                  <Button onClick={saveRecurring}>Guardar</Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {recurring === null ? (
+            <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14" />)}</div>
+          ) : recurring.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No hay movimientos recurrentes. Agregá tus gastos fijos (luz, gas, sueldo, etc.) y se crean solos cada mes.</p>
+          ) : (
+            <div className="space-y-2">
+              {recurring.map((r) => (
+                <Card key={r._id}>
+                  <CardContent className="p-3 flex items-center gap-3">
+                    <Repeat className="size-4 text-muted-foreground shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{r.description}</div>
+                      <div className="text-xs text-muted-foreground">
+                        Día {r.dayOfMonth} · {r.accountId?.name} · {r.categoryId?.name}
+                      </div>
+                    </div>
+                    <div className={`font-semibold text-sm whitespace-nowrap ${r.type === "income" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                      {r.type === "income" ? "+" : "-"}${new Intl.NumberFormat("es-AR").format(r.amount)}
+                    </div>
+                    <Button size="icon" variant="ghost" onClick={() => deleteRecurring(r._id)}>
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="cuenta" className="mt-4 space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Cuenta</CardTitle>
+              <CardTitle className="text-base">WhatsApp para registrar gastos</CardTitle>
+              <CardDescription>
+                Vinculá tu número para poder registrar gastos enviando un mensaje como: <em>&quot;gasté 800 en nafta&quot;</em>
+              </CardDescription>
             </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="space-y-1.5">
+                <Label>Número de WhatsApp</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+5492614001122 (con código de país)"
+                    className="flex-1"
+                  />
+                  <Button onClick={savePhone} disabled={savingPhone}>
+                    {savingPhone ? <Loader2 className="size-4 animate-spin" /> : <Smartphone className="size-4 mr-1.5" />}
+                    Guardar
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Formato: +549 + código de área + número (sin el 15). Ej: +5492614001122</p>
+              </div>
+              {typeof window !== "undefined" && (
+                <div className="rounded-md bg-muted p-3 text-xs space-y-1">
+                  <p className="font-medium">URL Webhook para Twilio:</p>
+                  <code className="break-all">{window.location.origin}/api/whatsapp/webhook</code>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle className="text-base">Contraseña</CardTitle></CardHeader>
             <CardContent>
               <Button asChild variant="outline">
                 <Link href="/cambiar-password">
