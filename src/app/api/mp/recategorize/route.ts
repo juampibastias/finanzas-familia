@@ -20,8 +20,6 @@ interface LeanTx {
 }
 interface LeanCat { _id: Types.ObjectId; name: string; kind: string }
 
-// Parse operation_type and poiType from the notes field stored during sync
-// Format: "MP ID: 123 | op: money_transfer | poi: INSTORE"
 function parseNotes(notes: string): { operationType: string; poiType: string | undefined } {
   const opMatch = /op: ([\w_]+)/.exec(notes);
   const poiMatch = /poi: (\w+)/.exec(notes);
@@ -31,10 +29,13 @@ function parseNotes(notes: string): { operationType: string; poiType: string | u
   };
 }
 
-export async function POST(): Promise<Response> {
+export async function POST(req: Request): Promise<Response> {
   try {
     const { userId } = await requireAuth();
-    void userId; // only authenticated users can call this
+    void userId;
+
+    const url = new URL(req.url);
+    const debug = url.searchParams.get("debug") === "1";
 
     await connectDB();
 
@@ -45,7 +46,45 @@ export async function POST(): Promise<Response> {
       return NextResponse.json({ error: "Sin categorías" }, { status: 400 });
     }
 
-    // Fetch all MP-imported transactions
+    // Return category list in debug mode so we can see what names exist
+    if (debug) {
+      const txSample = await Transaction.find({ externalRef: /^mp:/ })
+        .select("description type categoryId notes")
+        .limit(5)
+        .lean<LeanTx[]>();
+
+      const catMap = Object.fromEntries(categories.map((c) => [String(c._id), c.name]));
+
+      const sample = await Promise.all(txSample.map(async (tx) => {
+        const { operationType, poiType } = parseNotes(tx.notes ?? "");
+        const betterDesc = buildDescription(tx.description, operationType, tx.type);
+        const defaultId = tx.type === "income" ? defaultIncomeId : defaultExpenseId;
+        const newCategoryId = await aiCategorize(
+          betterDesc,
+          operationType,
+          poiType,
+          tx.type,
+          categories.map((c) => ({ _id: String(c._id), name: c.name, kind: c.kind })),
+          String(defaultId),
+        );
+        return {
+          desc: tx.description,
+          betterDesc,
+          type: tx.type,
+          operationType,
+          poiType,
+          currentCat: catMap[String(tx.categoryId)] ?? String(tx.categoryId),
+          aiPickedCat: catMap[newCategoryId] ?? newCategoryId,
+          wouldUpdate: betterDesc !== tx.description || newCategoryId !== String(tx.categoryId),
+        };
+      }));
+
+      return NextResponse.json({
+        categories: categories.map((c) => ({ name: c.name, kind: c.kind })),
+        sample,
+      });
+    }
+
     const txs = await Transaction.find({ externalRef: /^mp:/ })
       .select("description type categoryId notes")
       .lean<LeanTx[]>();
@@ -54,11 +93,9 @@ export async function POST(): Promise<Response> {
 
     for (const tx of txs) {
       const { operationType, poiType } = parseNotes(tx.notes ?? "");
-
-      // Rebuild description if it's still generic
       const betterDesc = buildDescription(tx.description, operationType, tx.type);
-
       const defaultId = tx.type === "income" ? defaultIncomeId : defaultExpenseId;
+
       const newCategoryId = await aiCategorize(
         betterDesc,
         operationType,
