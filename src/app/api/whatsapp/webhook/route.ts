@@ -15,11 +15,38 @@ const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 interface LeanAccount { _id: Types.ObjectId; name: string }
 interface LeanCategory { _id: Types.ObjectId; name: string; kind: string }
 
-function twiml(message: string): Response {
-  return new Response(
-    `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${message}</Message></Response>`,
-    { headers: { "Content-Type": "text/xml" } },
-  );
+// Meta sends a GET to verify the webhook on first setup
+export async function GET(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const mode = url.searchParams.get("hub.mode");
+  const token = url.searchParams.get("hub.verify_token");
+  const challenge = url.searchParams.get("hub.challenge");
+
+  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    return new Response(challenge ?? "", { status: 200 });
+  }
+  return new Response("Forbidden", { status: 403 });
+}
+
+// Send a WhatsApp message via Meta Cloud API
+async function sendWhatsApp(to: string, message: string): Promise<void> {
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const token = process.env.WHATSAPP_TOKEN;
+  if (!phoneNumberId || !token) return;
+
+  await fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type: "text",
+      text: { body: message },
+    }),
+  });
 }
 
 async function parseTransaction(
@@ -52,74 +79,103 @@ Si no es un movimiento de dinero, respondé: null`;
   }
 }
 
+// Meta sends a POST for each incoming message
 export async function POST(req: Request): Promise<Response> {
   try {
-    // Parse Twilio's URL-encoded body
-    const text = await req.text();
-    const params = new URLSearchParams(text);
-    const from = params.get("From") ?? ""; // "whatsapp:+549..."
-    const body = (params.get("Body") ?? "").trim();
+    const body = await req.json() as {
+      object: string;
+      entry: Array<{
+        changes: Array<{
+          value: {
+            messages?: Array<{
+              from: string;
+              type: string;
+              text?: { body: string };
+            }>;
+          };
+        }>;
+      }>;
+    };
 
-    if (!body) return twiml("Mandame un mensaje como: *gasté 800 en nafta* o *cobré 50000 del sueldo*");
-
-    // Normalize phone: strip "whatsapp:" prefix
-    const phone = from.replace(/^whatsapp:/i, "");
-
-    await connectDB();
-
-    // Find user by phone number
-    const user = await User.findOne({ phone }).lean();
-    if (!user) {
-      return twiml(`⚠️ Tu número (${phone}) no está vinculado. Ingresá a la app → Configuración → Cuenta y agregá tu número de WhatsApp.`);
+    // Meta expects 200 immediately — process async
+    if (body.object !== "whatsapp_business_account") {
+      return NextResponse.json({ ok: true });
     }
 
-    const userId = String(user._id);
-    const [accounts, categories] = await Promise.all([
-      Account.find().lean<LeanAccount[]>(),
-      Category.find().lean<LeanCategory[]>(),
-    ]);
-
-    const expenseCats = categories.filter((c) => c.kind === "expense").map((c) => c.name);
-    const incomeCats = categories.filter((c) => c.kind === "income").map((c) => c.name);
-
-    const parsed = await parseTransaction(body, expenseCats, incomeCats);
-    if (!parsed) {
-      return twiml("No entendí ese mensaje. Probá con: *gasté 1500 en súper* o *cobré 80000 de sueldo*");
+    const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    if (!message || message.type !== "text" || !message.text?.body) {
+      return NextResponse.json({ ok: true });
     }
 
-    // Find category
-    const category = categories.find(
-      (c) => c.kind === parsed.type && c.name.toLowerCase() === parsed.categoryName.toLowerCase(),
-    ) ?? categories.find((c) => c.kind === parsed.type);
-    if (!category) return twiml("No encontré una categoría adecuada. Revisá las categorías en la app.");
+    const from = message.from; // e.g. "5492614001122" (no +)
+    const text = message.text.body.trim();
 
-    // Find account (prefer accountHint match, fallback to first)
-    const account = accounts.find((a) =>
-      parsed.accountHint && a.name.toLowerCase().includes(parsed.accountHint.toLowerCase()),
-    ) ?? accounts[0];
-    if (!account) return twiml("No hay cuentas configuradas en la app.");
+    // Process in background — return 200 to Meta immediately
+    void (async () => {
+      try {
+        await connectDB();
 
-    // Create transaction with today's date
-    await Transaction.create({
-      date: new Date(),
-      amount: parsed.amount,
-      type: parsed.type,
-      accountId: account._id,
-      categoryId: category._id,
-      description: parsed.description,
-      notes: `WhatsApp: "${body}"`,
-      externalRef: null,
-      recurring: false,
-      recurringMonth: null,
-      installment: null,
-      createdBy: new Types.ObjectId(userId),
-    });
+        // Look up user by phone — strip leading + for comparison
+        const phoneVariants = [from, `+${from}`];
+        const user = await User.findOne({ phone: { $in: phoneVariants } }).lean();
+        if (!user) {
+          await sendWhatsApp(from, `⚠️ Tu número no está vinculado. Ingresá a la app → Configuración → Cuenta y agregá tu número de WhatsApp.`);
+          return;
+        }
 
-    const sign = parsed.type === "income" ? "+" : "-";
-    const amountFmt = new Intl.NumberFormat("es-AR").format(parsed.amount);
-    return twiml(`✅ Registrado: ${sign}$${amountFmt} en *${category.name}* (${account.name})\n_${parsed.description}_`);
-  } catch (err) {
-    console.error("[whatsapp/webhook]", err);
-    return twiml("❌ Ocurrió un error. Intentá de nuevo.");
+        const [accounts, categories] = await Promise.all([
+          Account.find().lean<LeanAccount[]>(),
+          Category.find().lean<LeanCategory[]>(),
+        ]);
+
+        const expenseCats = categories.filter((c) => c.kind === "expense").map((c) => c.name);
+        const incomeCats = categories.filter((c) => c.kind === "income").map((c) => c.name);
+
+        const parsed = await parseTransaction(text, expenseCats, incomeCats);
+        if (!parsed) {
+          await sendWhatsApp(from, "No entendí ese mensaje 🤔\nProbá con: *gasté 1500 en súper* o *cobré 80000 de sueldo*");
+          return;
+        }
+
+        const category = categories.find(
+          (c) => c.kind === parsed.type && c.name.toLowerCase() === parsed.categoryName.toLowerCase(),
+        ) ?? categories.find((c) => c.kind === parsed.type);
+
+        const account = accounts.find((a) =>
+          parsed.accountHint && a.name.toLowerCase().includes(parsed.accountHint.toLowerCase()),
+        ) ?? accounts[0];
+
+        if (!category || !account) {
+          await sendWhatsApp(from, "❌ No encontré cuenta o categoría. Revisá la configuración en la app.");
+          return;
+        }
+
+        await Transaction.create({
+          date: new Date(),
+          amount: parsed.amount,
+          type: parsed.type,
+          accountId: account._id,
+          categoryId: category._id,
+          description: parsed.description,
+          notes: `WhatsApp: "${text}"`,
+          externalRef: null,
+          recurring: false,
+          recurringMonth: null,
+          installment: null,
+          createdBy: new Types.ObjectId(String(user._id)),
+        });
+
+        const sign = parsed.type === "income" ? "+" : "-";
+        const amountFmt = new Intl.NumberFormat("es-AR").format(parsed.amount);
+        await sendWhatsApp(from, `✅ ${sign}$${amountFmt} registrado\n📂 ${category.name} · 🏦 ${account.name}\n📝 ${parsed.description}`);
+      } catch (err) {
+        console.error("[whatsapp/webhook]", err);
+      }
+    })();
+
+    // Always return 200 immediately so Meta doesn't retry
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ ok: true });
   }
 }
