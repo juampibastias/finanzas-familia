@@ -27,45 +27,6 @@ async function ensureValidToken(conn: IMPConnection): Promise<string> {
 interface LeanCategory { _id: Types.ObjectId; name: string; kind: string }
 interface LeanAccount { _id: Types.ObjectId; createdBy?: Types.ObjectId }
 
-/**
- * Find the best matching category for a given hint and transaction type.
- * Tries: direct name match → reverse contains → fragment match → generic fallback.
- */
-export function resolveCategoryId(
-  hint: string,
-  kind: "income" | "expense",
-  categories: LeanCategory[],
-  defaultExpenseId: Types.ObjectId,
-  defaultIncomeId: Types.ObjectId,
-): Types.ObjectId {
-  if (hint) {
-    const hintLower = hint.toLowerCase();
-    // 1. Category name contains hint (e.g. hint="Sueldo" → cat="Sueldo XNET")
-    let match = categories.find((c) => c.kind === kind && c.name.toLowerCase().includes(hintLower));
-    if (match) return match._id;
-
-    // 2. Hint contains category name (e.g. hint="Telecomunicaciones" → cat="Servicios")
-    match = categories.find((c) => c.kind === kind && hintLower.includes(c.name.toLowerCase()));
-    if (match) return match._id;
-
-    // 3. Fragment-based fuzzy match using synonym list
-    const fragments = HINT_FRAGMENTS[hint] ?? [];
-    match = categories.find((c) =>
-      c.kind === kind && fragments.some((f) => c.name.toLowerCase().includes(f)),
-    );
-    if (match) return match._id;
-  }
-
-  // 4. Generic catch-all category (Otros, Varios, General, etc.)
-  const genericNames = ["otros", "varios", "general", "sin categoria", "miscelanea"];
-  const generic = categories.find(
-    (c) => c.kind === kind && genericNames.some((n) => c.name.toLowerCase().includes(n)),
-  );
-  if (generic) return generic._id;
-
-  // 5. Last resort: first category of the right kind
-  return kind === "income" ? defaultIncomeId : defaultExpenseId;
-}
 
 export async function syncMPConnection(connectionId: string, systemUserId: string): Promise<SyncResult> {
   await connectDB();
