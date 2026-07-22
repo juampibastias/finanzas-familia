@@ -25,7 +25,7 @@ export interface MPPayment {
   date_created: string;
   date_approved: string | null;
   money_release_date: string | null;
-  operation_type: string;
+  operation_type: string; // money_transfer | regular_payment | recurring_payment | account_fund | ...
   payment_method_id: string;
   payment_type_id: string;
   status: string;
@@ -33,6 +33,10 @@ export interface MPPayment {
   currency_id: string;
   description: string;
   transaction_amount: number;
+  point_of_interaction?: {
+    type: string;       // INSTORE | CHECKOUT | PSP_TRANSFER | SUBSCRIPTIONS | CREDITS
+    sub_type?: string;
+  };
   // When user is the RECEIVER (income): collector_id at root, payer as object
   collector_id?: number;
   payer?: { id: string | number; email?: string };
@@ -128,27 +132,95 @@ export function decodeState(state: string): { userId: string; accountId: string;
   }
 }
 
-// Auto-categorization keyword rules (keyword → category name hint)
-const CATEGORY_RULES: { keywords: string[]; hint: string; kind: "income" | "expense" }[] = [
-  { keywords: ["supermercado", "super", "coto", "carrefour", "walmart", "disco", "jumbo", "vea", "dia"], hint: "Supermercado", kind: "expense" },
-  { keywords: ["farmacia", "drogueria", "farmacity"], hint: "Salud", kind: "expense" },
-  { keywords: ["restaurant", "sushi", "pizza", "burger", "mcdonald", "starbucks", "cafeter", "resto", "bar "], hint: "Restaurantes", kind: "expense" },
-  { keywords: ["combustible", "nafta", "shell", "ypf", "axion", "petrobras"], hint: "Transporte", kind: "expense" },
-  { keywords: ["uber", "cabify", "remis", "taxi", "colectivo", "subte", "tren"], hint: "Transporte", kind: "expense" },
-  { keywords: ["netflix", "spotify", "disney", "amazon", "hbo", "suscripcion", "streaming"], hint: "Entretenimiento", kind: "expense" },
-  { keywords: ["edenor", "edesur", "metrogas", "aysa", "fibertel", "claro", "movistar", "personal", "telecom"], hint: "Servicios", kind: "expense" },
-  { keywords: ["alquiler", "expensas"], hint: "Vivienda", kind: "expense" },
-  { keywords: ["sueldo", "salario", "haberes", "honorarios"], hint: "Sueldo", kind: "income" },
-  { keywords: ["transferencia de", "dinero de", "recibiste de", "te envió"], hint: "Transferencias", kind: "income" },
-  { keywords: ["transferencia a", "enviaste a", "enviaste dinero", "le enviaste"], hint: "Transferencias", kind: "expense" },
+// Maps description keywords → category name hint
+const KEYWORD_RULES: { keywords: string[]; hint: string }[] = [
+  { keywords: ["supermercado", "coto", "carrefour", "walmart", "disco ", "jumbo", "vea ", "dia "], hint: "Supermercado" },
+  { keywords: ["farmacia", "drogueria", "farmacity"], hint: "Salud" },
+  { keywords: ["restaurant", "sushi", "pizza", "burger", "mcdonald", "starbucks", "cafeter", "rappi", "pedidos ya", "pedidosya", "mostaza"], hint: "Restaurantes" },
+  { keywords: ["combustible", "nafta", "shell ", "ypf", "axion", "petrobras", "peaje"], hint: "Transporte" },
+  { keywords: ["uber", "cabify", "remis", "taxi ", "colectivo", "subte", "tren ", "sube "], hint: "Transporte" },
+  { keywords: ["netflix", "spotify", "disney", "amazon prime", "hbo ", "turnesco", "deezer", "apple tv", "paramount"], hint: "Entretenimiento" },
+  { keywords: ["movistar", "claro ", "personal ", "telecom", "fibertel", "cablevision", "arnet", "flow "], hint: "Telecomunicaciones" },
+  { keywords: ["edenor", "edesur", "metrogas", "aysa", "epec", "ecogas", "luz ", "gas "], hint: "Servicios" },
+  { keywords: ["alquiler", "expensas", "consorcio"], hint: "Vivienda" },
+  { keywords: ["mercado credito", "cuotas de mercado", "prestamo", "préstamo", "credito personal", "crédito personal"], hint: "Préstamos" },
+  { keywords: ["sueldo", "salario", "haberes", "honorarios", "liquidacion", "liquidación"], hint: "Sueldo" },
+  { keywords: ["veterinari"], hint: "Mascotas" },
+  { keywords: ["colegio", "escuela", "universidad", "instituto", "academia", "jardin"], hint: "Educación" },
+  { keywords: ["gimnasio", " gym"], hint: "Deporte" },
+  { keywords: ["seguro ", "seguros"], hint: "Seguros" },
 ];
 
-export function guessCategory(description: string): { hint: string; kind: "income" | "expense" } | null {
+// Maps hint → fragments that might appear in category names (for fuzzy matching)
+export const HINT_FRAGMENTS: Record<string, string[]> = {
+  "Supermercado":       ["supermercado", "alimentacion", "comida", "mercado", "compra"],
+  "Salud":              ["salud", "medico", "medic", "farmacia", "hospital", "clinica"],
+  "Restaurantes":       ["restaurant", "gastronomia", "comida", "delivery", "almuerzo", "cena"],
+  "Transporte":         ["transporte", "viaje", "auto", "combustible", "nafta", "movilidad"],
+  "Entretenimiento":    ["entretenimiento", "ocio", "suscripcion", "streaming", "digital", "cultura"],
+  "Telecomunicaciones": ["telecom", "servicio", "telefon", "celular", "internet", "cable", "comunicacion"],
+  "Servicios":          ["servicio", "hogar", "utilidad", "expensa", "luz", "gas", "agua"],
+  "Vivienda":           ["vivienda", "alquiler", "hogar", "casa", "expensa", "consorcio", "inmueble"],
+  "Préstamos":          ["prestamo", "credito", "deuda", "financ", "cuota"],
+  "Compras":            ["compra", "comercio", "gasto", "varios", "otros", "general"],
+  "Sueldo":             ["sueldo", "salario", "ingreso", "trabajo", "honorario", "laboral", "renta"],
+  "Transferencias":     ["transferencia", "varios", "otros", "envio"],
+  "Depositos":          ["deposito", "ingreso", "recarga", "carga", "saldo"],
+  "Suscripciones":      ["suscripcion", "streaming", "digital", "entretenimiento", "servicio"],
+  "Mascotas":           ["mascota", "veterinari", "animal"],
+  "Educación":          ["educacion", "colegio", "escuela", "estudio", "formacion"],
+  "Deporte":            ["deporte", "gimnasio", "fitness", "gym"],
+  "Seguros":            ["seguro", "poliza"],
+};
+
+/**
+ * Guess a category hint from a description + MP operation metadata.
+ * Returns only a hint string — the actual category KIND is determined by
+ * whether the user is collector (income) or payer (expense) in mp-sync.
+ */
+export function guessCategory(
+  description: string,
+  operationType?: string,
+  poiType?: string,
+): { hint: string } | null {
+  // High-confidence rules from operation metadata
+  if (operationType === "money_transfer") return { hint: "Transferencias" };
+  if (operationType === "account_fund") return { hint: "Depositos" };
+  if (poiType === "INSTORE") return { hint: "Compras" };
+  if (operationType === "recurring_payment") return { hint: "Suscripciones" };
+  if (poiType === "CREDITS") return { hint: "Préstamos" };
+
   const lower = description.toLowerCase();
-  for (const rule of CATEGORY_RULES) {
+  for (const rule of KEYWORD_RULES) {
     if (rule.keywords.some((kw) => lower.includes(kw))) {
-      return { hint: rule.hint, kind: rule.kind };
+      return { hint: rule.hint };
     }
   }
   return null;
+}
+
+/**
+ * Generate a meaningful description when MP sends a generic one.
+ */
+export function buildDescription(
+  rawDescription: string,
+  operationType: string,
+  txType: "income" | "expense",
+): string {
+  const genericWords = ["varios", "pago", "cobro", ""];
+  const isGeneric = genericWords.includes(rawDescription.trim().toLowerCase());
+  if (!isGeneric) return rawDescription.trim();
+
+  switch (operationType) {
+    case "money_transfer":
+      return txType === "income" ? "Transferencia recibida" : "Transferencia enviada";
+    case "account_fund":
+      return "Recarga de cuenta MP";
+    case "recurring_payment":
+      return "Pago suscripción";
+    case "regular_payment":
+      return txType === "income" ? "Cobro MP" : "Pago MP";
+    default:
+      return txType === "income" ? "Cobro MP" : "Pago MP";
+  }
 }

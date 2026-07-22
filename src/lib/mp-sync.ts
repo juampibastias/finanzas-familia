@@ -4,7 +4,8 @@ import { MPConnection, type IMPConnection } from "@/lib/models/MPConnection";
 import { Transaction } from "@/lib/models/Transaction";
 import { Category } from "@/lib/models/Category";
 import { Account } from "@/lib/models/Account";
-import { mpGet, refreshToken, guessCategory, type MPPaymentSearchResult } from "@/lib/mp-api";
+import { mpGet, refreshToken, buildDescription, type MPPaymentSearchResult } from "@/lib/mp-api";
+import { aiCategorize } from "@/lib/mp-categorize";
 
 interface SyncResult {
   imported: number;
@@ -26,18 +27,43 @@ async function ensureValidToken(conn: IMPConnection): Promise<string> {
 interface LeanCategory { _id: Types.ObjectId; name: string; kind: string }
 interface LeanAccount { _id: Types.ObjectId; createdBy?: Types.ObjectId }
 
-async function findCategoryId(
+/**
+ * Find the best matching category for a given hint and transaction type.
+ * Tries: direct name match → reverse contains → fragment match → generic fallback.
+ */
+export function resolveCategoryId(
   hint: string,
   kind: "income" | "expense",
   categories: LeanCategory[],
   defaultExpenseId: Types.ObjectId,
   defaultIncomeId: Types.ObjectId,
-): Promise<Types.ObjectId> {
-  const lower = hint.toLowerCase();
-  const match = categories.find(
-    (c) => c.kind === kind && c.name.toLowerCase().includes(lower),
+): Types.ObjectId {
+  if (hint) {
+    const hintLower = hint.toLowerCase();
+    // 1. Category name contains hint (e.g. hint="Sueldo" → cat="Sueldo XNET")
+    let match = categories.find((c) => c.kind === kind && c.name.toLowerCase().includes(hintLower));
+    if (match) return match._id;
+
+    // 2. Hint contains category name (e.g. hint="Telecomunicaciones" → cat="Servicios")
+    match = categories.find((c) => c.kind === kind && hintLower.includes(c.name.toLowerCase()));
+    if (match) return match._id;
+
+    // 3. Fragment-based fuzzy match using synonym list
+    const fragments = HINT_FRAGMENTS[hint] ?? [];
+    match = categories.find((c) =>
+      c.kind === kind && fragments.some((f) => c.name.toLowerCase().includes(f)),
+    );
+    if (match) return match._id;
+  }
+
+  // 4. Generic catch-all category (Otros, Varios, General, etc.)
+  const genericNames = ["otros", "varios", "general", "sin categoria", "miscelanea"];
+  const generic = categories.find(
+    (c) => c.kind === kind && genericNames.some((n) => c.name.toLowerCase().includes(n)),
   );
-  if (match) return match._id;
+  if (generic) return generic._id;
+
+  // 5. Last resort: first category of the right kind
   return kind === "income" ? defaultIncomeId : defaultExpenseId;
 }
 
@@ -49,12 +75,10 @@ export async function syncMPConnection(connectionId: string, systemUserId: strin
 
   const accessToken = await ensureValidToken(conn);
 
-  // Load categories and accounts
   const categories = await Category.find().lean<LeanCategory[]>();
   const account = await Account.findById(conn.linkedAccountId).lean<LeanAccount>();
   if (!account) throw new Error("Cuenta vinculada no encontrada");
 
-  // Default categories (fallback)
   const defaultExpenseCat = categories.find((c) => c.kind === "expense");
   const defaultIncomeCat = categories.find((c) => c.kind === "income");
   if (!defaultExpenseCat || !defaultIncomeCat) throw new Error("No hay categorías configuradas");
@@ -62,7 +86,6 @@ export async function syncMPConnection(connectionId: string, systemUserId: strin
   const defaultExpenseId = defaultExpenseCat._id;
   const defaultIncomeId = defaultIncomeCat._id;
 
-  // Determine date range
   const fromDate = conn.lastSyncAt ?? conn.syncFromDate;
   const fromStr = fromDate.toISOString().replace("Z", "-00:00");
   const toStr = new Date().toISOString().replace("Z", "-00:00");
@@ -100,22 +123,28 @@ export async function syncMPConnection(connectionId: string, systemUserId: strin
       try {
         const mpUid = Number(conn.mpUserId);
         const isIncome = payment.collector_id === mpUid;
-        // Skip if neither payer nor collector (shouldn't happen but be safe)
         if (!isIncome && payment.payer_id !== mpUid) { result.skipped++; continue; }
         const txType: "income" | "expense" = isIncome ? "income" : "expense";
+
         const amount = Math.abs(payment.transaction_amount);
-        const description = payment.description || (isIncome ? "Cobro MP" : "Pago MP");
+        const poiType = payment.point_of_interaction?.type;
 
-        const guess = guessCategory(description);
-        const effectiveKind = guess?.kind ?? txType;
-        const effectiveHint = guess?.hint ?? "";
+        // Build a meaningful description (replaces generic "Varios" etc.)
+        const description = buildDescription(
+          payment.description ?? "",
+          payment.operation_type,
+          txType,
+        );
 
-        const categoryId = await findCategoryId(
-          effectiveHint,
-          effectiveKind,
-          categories,
-          defaultExpenseId,
-          defaultIncomeId,
+        // AI-powered categorization with keyword-rule shortcut
+        const defaultId = txType === "income" ? defaultIncomeId : defaultExpenseId;
+        const categoryId = await aiCategorize(
+          description,
+          payment.operation_type,
+          poiType,
+          txType,
+          categories.map((c) => ({ _id: String(c._id), name: c.name, kind: c.kind })),
+          String(defaultId),
         );
 
         const txDate = new Date(payment.date_approved ?? payment.date_created);
@@ -125,9 +154,9 @@ export async function syncMPConnection(connectionId: string, systemUserId: strin
           amount,
           type: txType,
           accountId: conn.linkedAccountId,
-          categoryId,
+          categoryId: new Types.ObjectId(categoryId),
           description,
-          notes: `Importado desde MercadoPago (ID: ${payment.id})`,
+          notes: `MP ID: ${payment.id} | op: ${payment.operation_type}${poiType ? ` | poi: ${poiType}` : ""}`,
           externalRef,
           recurring: false,
           recurringMonth: null,
