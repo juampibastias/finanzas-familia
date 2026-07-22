@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { confirmDelete } from "@/lib/swal";
-import { Plus, Pencil, Trash2, Download, KeyRound, RefreshCw, Link2, Link2Off, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Download, KeyRound, RefreshCw, Link2, Link2Off, Loader2, TrendingUp, TrendingDown } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,7 +29,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/page-header";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatCurrency } from "@/lib/format";
 
 interface CategoryRow {
   _id: string;
@@ -54,6 +54,15 @@ interface AccountOpt {
   name: string;
   type: string;
   bank: string | null;
+}
+
+interface MPTxRow {
+  _id: string;
+  date: string;
+  description: string;
+  amount: number;
+  type: "income" | "expense";
+  categoryId: { name: string } | null;
 }
 
 interface CategoryFormState {
@@ -86,10 +95,19 @@ function ConfigPageInner(): React.ReactElement {
   const [mpAccounts, setMpAccounts] = useState<AccountOpt[]>([]);
   const [mpSelectedAccount, setMpSelectedAccount] = useState<string>("");
   const [mpSyncing, setMpSyncing] = useState<string | null>(null);
+  const [mpTxs, setMpTxs] = useState<Record<string, MPTxRow[]>>({});
 
   const load = useCallback(async () => {
     const res = await fetch("/api/categories", { cache: "no-store" });
     if (res.ok) setCategories((await res.json()) as CategoryRow[]);
+  }, []);
+
+  const loadMpTxs = useCallback(async (connectionId: string) => {
+    const res = await fetch(`/api/mp/transactions?connectionId=${connectionId}&limit=100`, { cache: "no-store" });
+    if (res.ok) {
+      const data = (await res.json()) as MPTxRow[];
+      setMpTxs((prev) => ({ ...prev, [connectionId]: data }));
+    }
   }, []);
 
   const loadMp = useCallback(async () => {
@@ -97,12 +115,16 @@ function ConfigPageInner(): React.ReactElement {
       fetch("/api/mp/connections", { cache: "no-store" }),
       fetch("/api/accounts", { cache: "no-store" }),
     ]);
-    if (connRes.ok) setMpConnections((await connRes.json()) as MPConnectionRow[]);
+    if (connRes.ok) {
+      const conns = (await connRes.json()) as MPConnectionRow[];
+      setMpConnections(conns);
+      for (const c of conns) void loadMpTxs(c._id);
+    }
     if (accRes.ok) {
       const all = (await accRes.json()) as AccountOpt[];
       setMpAccounts(all.filter((a) => a.bank === "MercadoPago" || a.type === "wallet"));
     }
-  }, []);
+  }, [loadMpTxs]);
 
   useEffect(() => {
     void load();
@@ -210,6 +232,7 @@ function ConfigPageInner(): React.ReactElement {
       const data = (await res.json()) as { imported: number; skipped: number; errors: number };
       toast.success(`Sincronizado: ${data.imported} nuevos, ${data.skipped} ya existentes`);
       void loadMp();
+      void loadMpTxs(connectionId);
     } else {
       toast.error("Error al sincronizar");
     }
@@ -353,49 +376,107 @@ function ConfigPageInner(): React.ReactElement {
           ) : mpConnections.length === 0 ? (
             <p className="text-sm text-muted-foreground">Ninguna cuenta conectada todavía.</p>
           ) : (
-            <div className="space-y-2">
-              {mpConnections.map((c) => (
-                <Card key={c._id}>
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div className="min-w-0">
-                        <div className="font-medium">{c.mpNickname || c.mpEmail}</div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {c.mpEmail} · Cuenta: <strong>{c.linkedAccountId?.name}</strong>
+            <div className="space-y-4">
+              {mpConnections.map((c) => {
+                const txs = mpTxs[c._id] ?? null;
+                return (
+                  <Card key={c._id}>
+                    <CardContent className="p-4 space-y-3">
+                      {/* Header row */}
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <div className="font-medium">{c.mpNickname || c.mpEmail}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {c.mpEmail} · Cuenta: <strong>{c.linkedAccountId?.name}</strong>
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {c.lastSyncAt
+                              ? `Última sync: ${formatDate(c.lastSyncAt)} ${new Date(c.lastSyncAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}`
+                              : "Sin sincronizar aún"}
+                            {txs !== null && (
+                              <span className="ml-2 font-medium text-foreground">{txs.length} movimientos importados</span>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {c.lastSyncAt
-                            ? `Última sync: ${formatDate(c.lastSyncAt)} ${new Date(c.lastSyncAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}`
-                            : "Sin sincronizar aún"}
+                        <div className="flex gap-2 shrink-0 flex-wrap">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => mpSync(c._id)}
+                            disabled={mpSyncing === c._id}
+                          >
+                            {mpSyncing === c._id ? (
+                              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                            ) : (
+                              <RefreshCw className="size-3.5 mr-1.5" />
+                            )}
+                            Sincronizar
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => mpDisconnect(c._id)}
+                          >
+                            <Link2Off className="size-3.5 mr-1.5" />
+                            Desvincular
+                          </Button>
                         </div>
                       </div>
-                      <div className="flex gap-2 shrink-0 flex-wrap">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => mpSync(c._id)}
-                          disabled={mpSyncing === c._id}
-                        >
-                          {mpSyncing === c._id ? (
-                            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                          ) : (
-                            <RefreshCw className="size-3.5 mr-1.5" />
-                          )}
-                          Sincronizar
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => mpDisconnect(c._id)}
-                        >
-                          <Link2Off className="size-3.5 mr-1.5" />
-                          Desvincular
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+
+                      {/* Transactions list */}
+                      {mpSyncing === c._id ? (
+                        <div className="space-y-1.5">
+                          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8" />)}
+                        </div>
+                      ) : txs === null ? (
+                        <Skeleton className="h-20" />
+                      ) : txs.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No hay movimientos importados aún.</p>
+                      ) : (
+                        <div className="rounded-md border overflow-hidden">
+                          <div className="max-h-72 overflow-y-auto">
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+                                <tr>
+                                  <th className="text-left px-3 py-2 font-medium">Fecha</th>
+                                  <th className="text-left px-3 py-2 font-medium">Descripción</th>
+                                  <th className="text-left px-3 py-2 font-medium hidden sm:table-cell">Categoría</th>
+                                  <th className="text-right px-3 py-2 font-medium">Monto</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y">
+                                {txs.map((tx) => (
+                                  <tr key={tx._id} className="hover:bg-muted/40 transition-colors">
+                                    <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+                                      {formatDate(tx.date)}
+                                    </td>
+                                    <td className="px-3 py-2 max-w-[160px] sm:max-w-xs">
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        {tx.type === "income" ? (
+                                          <TrendingUp className="size-3 text-emerald-500 shrink-0" />
+                                        ) : (
+                                          <TrendingDown className="size-3 text-red-500 shrink-0" />
+                                        )}
+                                        <span className="truncate">{tx.description || "—"}</span>
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 text-muted-foreground hidden sm:table-cell">
+                                      {tx.categoryId?.name ?? "—"}
+                                    </td>
+                                    <td className={`px-3 py-2 text-right font-medium whitespace-nowrap ${tx.type === "income" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                                      {tx.type === "income" ? "+" : "-"}{formatCurrency(tx.amount)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
 
