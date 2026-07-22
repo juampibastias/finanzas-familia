@@ -64,8 +64,8 @@ export async function syncMPConnection(connectionId: string, systemUserId: strin
 
   // Determine date range
   const fromDate = conn.lastSyncAt ?? conn.syncFromDate;
-  const fromStr = fromDate.toISOString().replace("Z", ".000-00:00");
-  const toStr = new Date().toISOString().replace("Z", ".000-00:00");
+  const fromStr = fromDate.toISOString().replace("Z", "-00:00");
+  const toStr = new Date().toISOString().replace("Z", "-00:00");
 
   const result: SyncResult = { imported: 0, skipped: 0, errors: 0 };
   let offset = 0;
@@ -82,7 +82,9 @@ export async function syncMPConnection(connectionId: string, systemUserId: strin
         limit: String(pageSize),
         offset: String(offset),
       });
-    } catch {
+    } catch (err) {
+      console.error("[mp-sync] payments/search error:", err);
+      result.errors++;
       break;
     }
 
@@ -96,7 +98,10 @@ export async function syncMPConnection(connectionId: string, systemUserId: strin
       if (existing) { result.skipped++; continue; }
 
       try {
-        const isIncome = payment.collector_id === Number(conn.mpUserId);
+        const mpUid = Number(conn.mpUserId);
+        const isIncome = payment.collector_id === mpUid;
+        // Skip if neither payer nor collector (shouldn't happen but be safe)
+        if (!isIncome && payment.payer_id !== mpUid) { result.skipped++; continue; }
         const txType: "income" | "expense" = isIncome ? "income" : "expense";
         const amount = Math.abs(payment.transaction_amount);
         const description = payment.description || (isIncome ? "Cobro MP" : "Pago MP");

@@ -33,17 +33,22 @@ export async function GET(): Promise<Response> {
       mpError = e instanceof Error ? e.message : String(e);
     }
 
+    // Reset lastSyncAt so next sync re-imports from syncFromDate
+    conn.lastSyncAt = null;
+    await conn.save();
+
     return NextResponse.json({
       connection: {
         mpUserId: conn.mpUserId,
         mpNickname: conn.mpNickname,
-        lastSyncAt: conn.lastSyncAt,
+        lastSyncAt: null,
         syncFromDate: conn.syncFromDate,
         linkedAccountId: conn.linkedAccountId,
       },
       transactionsImported: imported,
       mpApiSample: mpData,
       mpApiError: mpError,
+      note: "lastSyncAt reset to null — next sync will re-import from syncFromDate",
     });
   } catch (err) {
     return handleAuthError(err) ?? handleError(err);

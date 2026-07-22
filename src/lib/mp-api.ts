@@ -33,10 +33,12 @@ export interface MPPayment {
   currency_id: string;
   description: string;
   transaction_amount: number;
-  net_received_amount: number;
-  total_paid_amount: number;
-  payer: { id: number; email: string; first_name?: string; last_name?: string };
-  collector_id: number;
+  // When user is the RECEIVER (income): collector_id at root, payer as object
+  collector_id?: number;
+  payer?: { id: string | number; email?: string };
+  // When user is the PAYER (expense): payer_id at root, collector as object
+  payer_id?: number;
+  collector?: { id: number };
 }
 
 export interface MPPaymentSearchResult {
