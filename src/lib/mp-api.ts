@@ -95,7 +95,9 @@ export async function refreshToken(rt: string): Promise<MPTokenResponse> {
 }
 
 export async function mpGet<T>(path: string, accessToken: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(`${MP_API}${path}`);
+  // User info lives on mercadolibre.com; payments on mercadopago.com
+  const base = path.startsWith("/users") ? "https://api.mercadolibre.com" : MP_API;
+  const url = new URL(`${base}${path}`);
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
