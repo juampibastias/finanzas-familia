@@ -40,7 +40,7 @@ export async function GET(req: Request): Promise<Response> {
     const tokens = await exchangeCode(code, redirectUri);
 
     // Fetch MP user info
-    const mpUser = await mpGet<MPUserInfo>("/v1/users/me", tokens.access_token);
+    const mpUser = await mpGet<MPUserInfo>("/users/me", tokens.access_token);
 
     await connectDB();
 
